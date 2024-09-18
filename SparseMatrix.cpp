@@ -7,13 +7,15 @@
 #include <algorithm>
 #include <execution> 
 #include <cassert>
+#include <unordered_set>
+
 
 // Struktura za CSR matricu
 struct CRSMatrix
 {
     int rows; // number of rows
     int cols; // number of columns
-    int nnz; // number of non-zero elements
+    
     std::vector<double> values; // non-zero elements
     std::vector<int> colIndex; // column indices
     std::vector<int> rowPtr; // row ptr
@@ -22,9 +24,9 @@ struct CRSMatrix
 
 // Struktura za dense matricu
 struct DenseMatrix {
-    int rows; // number of rows
-    int cols; // number of columns
-    std::vector<std::vector<double>> data; // matrix data
+    int rows; 
+    int cols; 
+    std::vector<std::vector<double>> data; 
 
     // Constructor
     DenseMatrix(int r, int c) : rows(r), cols(c), data(r, std::vector<double>(c, 0.0)) {}
@@ -34,7 +36,7 @@ struct DenseMatrix {
 void print_csr(const CRSMatrix& matrix) {
     std::cout << "Number of rows: " << matrix.rows << std::endl;
     std::cout << "Number of columns: " << matrix.cols << std::endl;
-    std::cout << "Number of non-zero elements: " << matrix.nnz << std::endl;
+    std::cout << "Number of non-zero elements: " << matrix.values.size() << std::endl;
 
     std::cout << "\nRow Pointer (rowPtr): ";
     for (const auto& val : matrix.rowPtr) {
@@ -55,79 +57,6 @@ void print_csr(const CRSMatrix& matrix) {
     std::cout << std::endl;
 }
 
-// Funkcija za paralelno transponiranje CSR matrice
-template <typename SIZE, typename R, typename C, typename V>
-auto ParallelTranspose(const SIZE rows, const SIZE cols, const SIZE nnz,
-    const SIZE base, const R& ai, const C& aj, const V& av) {
-    using ROWTYPE = typename std::decay<decltype(ai[0])>::type;
-    using COLTYPE = typename std::decay<decltype(aj[0])>::type;
-    using VALTYPE = typename std::decay<decltype(av[0])>::type;
-    const SIZE cols_transpose = rows;
-    const SIZE rows_transpose = cols;
-
-    std::vector<ROWTYPE> ai_transpose(rows_transpose + 1);
-    std::vector<COLTYPE> aj_transpose(nnz);
-    std::vector<VALTYPE> av_transpose(nnz);
-
-    ai_transpose[0] = base;
-
-    std::vector<std::vector<ROWTYPE>> threadPrefixSum(omp_get_max_threads(), std::vector<ROWTYPE>(rows_transpose));
-
-#pragma omp parallel
-    {
-        const int tid = omp_get_thread_num();
-        const int nthreads = omp_get_num_threads();
-
-        std::vector<ROWTYPE>& threadSum = threadPrefixSum[tid];
-
-#pragma omp for
-        for (SIZE i = 0; i < rows; i++) {
-            for (ROWTYPE j = ai[i] - base; j < ai[i + 1] - base; j++) {
-                threadSum[aj[j] - base]++;
-            }
-        }
-
-#pragma omp barrier
-#pragma omp for
-        for (SIZE rowID = 0; rowID < rows_transpose; rowID++) {
-            ai_transpose[rowID + 1] = 0;
-            for (int t = 0; t < nthreads; t++) {
-                ai_transpose[rowID + 1] += threadPrefixSum[t][rowID];
-            }
-        }
-
-#pragma omp barrier
-#pragma omp master
-        {
-            std::inclusive_scan(std::execution::par, ai_transpose.begin(), ai_transpose.end(), ai_transpose.begin());
-        }
-
-#pragma omp barrier
-#pragma omp for
-        for (SIZE rowID = 0; rowID < rows_transpose; rowID++) {
-            ROWTYPE tmp = threadPrefixSum[0][rowID];
-            threadPrefixSum[0][rowID] = ai_transpose[rowID];
-            for (int t = 1; t < nthreads; t++) {
-                std::swap(threadPrefixSum[t][rowID], tmp);
-                threadPrefixSum[t][rowID] += threadPrefixSum[t - 1][rowID];
-            }
-        }
-
-#pragma omp barrier
-
-#pragma omp for
-        for (SIZE i = 0; i < rows; i++) {
-            for (ROWTYPE j = ai[i] - base; j < ai[i + 1] - base; j++) {
-                const COLTYPE idx = threadPrefixSum[tid][aj[j] - base]++ - base;
-                aj_transpose[idx] = i + base;
-                av_transpose[idx] = av[j];
-            }
-        }
-    }
-
-    return std::make_tuple(std::move(ai_transpose), std::move(aj_transpose), std::move(av_transpose));
-}
-
 // Funkcija za generiranje slučajne sparse matrice
 CRSMatrix generate_sparse_matrix(int size, double sparsity) {
     CRSMatrix matrix;
@@ -135,8 +64,7 @@ CRSMatrix generate_sparse_matrix(int size, double sparsity) {
     matrix.cols = size;
     matrix.rowPtr.resize(size + 1, 0);
 
-    int nnz = static_cast<int>(size * size * sparsity);
-    matrix.nnz = nnz;
+    int nnz = static_cast<int>(size * size * sparsity);    
     matrix.values.resize(nnz);
     matrix.colIndex.resize(nnz);
 
@@ -159,6 +87,49 @@ CRSMatrix generate_sparse_matrix(int size, double sparsity) {
     return matrix;
 }
 
+CRSMatrix generate_sparse_matrix_equal(int size, double sparsity) {
+    CRSMatrix matrix;
+    matrix.rows = size;
+    matrix.cols = size;
+    matrix.rowPtr.resize(size + 1, 0);
+
+    int nnz = static_cast<int>(size * size * sparsity);
+    matrix.values.resize(nnz);
+    matrix.colIndex.resize(nnz);
+
+    int nnz_per_row = nnz / size; // Broj nenultih elemenata po redu
+    int remaining_nnz = nnz % size; // Ostatak nenultih elemenata
+
+    std::default_random_engine generator;
+    std::uniform_int_distribution<int> col_dist(0, size - 1);
+
+    int index = 0;
+
+    for (int i = 0; i < size; ++i) {
+        int row_nnz = nnz_per_row + (i < remaining_nnz ? 1 : 0); // Dodaj po jedan dodatni element u prvih nekoliko redova
+
+        matrix.rowPtr[i] = index;
+
+        std::unordered_set<int> used_cols; // Skup za praćenje korišćenih kolona kako bi se izbegli duplikati
+        for (int j = 0; j < row_nnz; ++j) {
+            int col;
+            do {
+                col = col_dist(generator);
+            } while (used_cols.find(col) != used_cols.end()); // Osiguraj da nema duplih kolona u istom redu
+
+            used_cols.insert(col);
+            matrix.colIndex[index] = col;
+            matrix.values[index] = 1;
+            ++index;
+        }
+    }
+
+    matrix.rowPtr[size] = nnz; // Poslednji element rowPtr pokazuje na kraj
+
+    return matrix;
+}
+
+
 // Funkcija za mjerenje vremena
 template <typename Func>
 auto measure_time(Func func) {
@@ -169,77 +140,7 @@ auto measure_time(Func func) {
     return duration.count();
 }
 
-int test() {
-    // Define the example matrix in CSR format
-    std::vector<int> values{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-    std::vector<int> cols{ 0, 1, 2, 0, 1, 2, 0, 1, 2 };
-    std::vector<int> rowP{ 0, 3, 6, 9 }; // rowPtr
-
-    // Number of rows and columns
-    int rows = 3;
-    int cols_count = 3;
-    int nnz = values.size();
-    int base = 0; // base for CSR format
-
-    // Call the ParallelTranspose function
-    auto [ai_transpose, aj_transpose, av_transpose] = ParallelTranspose(rows, cols_count, nnz, base, rowP, cols, values);
-
-    // Print the transposed matrix in CSR format
-    std::cout << "Transposed matrix in CSR format:" << std::endl;
-    std::cout << "rowPtr: ";
-    for (const auto& val : ai_transpose) {
-        std::cout << val << " ";
-    }
-    std::cout << std::endl;
-
-    std::cout << "colIndex: ";
-    for (const auto& val : aj_transpose) {
-        std::cout << val << " ";
-    }
-    std::cout << std::endl;
-
-    std::cout << "values: ";
-    for (const auto& val : av_transpose) {
-        std::cout << val << " ";
-    }
-    std::cout << std::endl;
-
-    return 0;
-}
-
-// Testna funkcija
-void test_generate_sparse_matrix() {
-    int size = 3; // Dimenzije matrice
-    double sparsity = 0.5; // Sparsity faktor (40% ne-nultih elemenata)
-
-    CRSMatrix matrix = generate_sparse_matrix(size, sparsity);
-
-    // Proveri dimenzije
-    assert(matrix.rows == size);
-    assert(matrix.cols == size);
-
-    // Proveri broj ne-nultih elemenata
-    int expected_nnz = static_cast<int>(size * size * sparsity);
-    assert(matrix.nnz == expected_nnz);
-
-    // Proveri da li su rowPtr, colIndex i val ispravni
-    for (int i = 0; i < size; ++i) {
-        assert(matrix.rowPtr[i + 1] >= matrix.rowPtr[i]); // rowPtr mora biti monotono rastuća
-    }
-
-    // Proveri da li su svi koloni unutar opsega
-    for (int i = 0; i < matrix.nnz; ++i) {
-        assert(matrix.colIndex[i] >= 0 && matrix.colIndex[i] < size); // Kolone moraju biti unutar opsega
-        assert(matrix.values[i] >= 0.1 && matrix.values[i] <= 1.0); // Vrednosti moraju biti unutar opsega
-    }
-
-    std::cout << "Test passed: Sparse matrix generated successfully." << std::endl;
-    print_csr(matrix);
-}
-
-
-
-DenseMatrix multiply_csr_with_transpose(const CRSMatrix& A, const CRSMatrix& B_transposed) {
+DenseMatrix multiply_csr(const CRSMatrix& A, const CRSMatrix& B_transposed) {
     assert(A.cols == B_transposed.rows);
 
     DenseMatrix C(A.rows, B_transposed.cols);
@@ -261,7 +162,98 @@ DenseMatrix multiply_csr_with_transpose(const CRSMatrix& A, const CRSMatrix& B_t
     return C;
 }
 
-DenseMatrix multiply_csr_with_transpose_parallel(const CRSMatrix& A, const CRSMatrix& B_transposed) {
+CRSMatrix dense_to_csr(const DenseMatrix& dense) {
+    CRSMatrix csr;
+    csr.rows = dense.rows;
+    csr.cols = dense.cols;
+
+    // Initialize rowPtr with zeros (size: rows + 1)
+    csr.rowPtr.resize(csr.rows + 1, 0);
+
+    // Temporary vectors to store column indices and values
+    std::vector<int> tempColIndex;
+    std::vector<double> tempValues;
+
+    // Populate row pointers and collect column indices and values
+    for (int i = 0; i < dense.rows; ++i) {
+        int rowStart = tempValues.size(); // Starting index for the current row in values/colIndices
+
+        for (int j = 0; j < dense.cols; ++j) {
+            if (dense.data[i][j] != 0) {
+                tempColIndex.push_back(j);
+                tempValues.push_back(dense.data[i][j]);
+            }
+        }
+
+        // Update rowPtr for the next row
+        csr.rowPtr[i + 1] = tempValues.size();
+    }
+
+    // Assign column indices and values
+    csr.colIndex = std::move(tempColIndex);
+    csr.values = std::move(tempValues);
+
+    return csr;
+}
+
+
+// ovo ne radi kako treba radi ali zna da zamijeni skroz redove 
+CRSMatrix dense_to_csr_parallel(const DenseMatrix& dense) {
+    CRSMatrix csr;
+    csr.rows = dense.rows;
+    csr.cols = dense.cols;
+
+    // Initialize rowPtr with zeros (size: rows + 1)
+    csr.rowPtr.resize(csr.rows + 1, 0);
+
+    // Prepare temporary vectors for the final result
+    std::vector<int> tempColIndex;
+    std::vector<double> tempValues;
+
+    // Resize the temporary vectors to accommodate the worst-case scenario
+    tempColIndex.reserve(dense.rows * dense.cols);
+    tempValues.reserve(dense.rows * dense.cols);
+
+#pragma omp parallel
+    {
+        // Thread-local vectors to collect results
+        std::vector<int> localColIndex;
+        std::vector<double> localValues;
+
+#pragma omp for
+        for (int i = 0; i < dense.rows; ++i) {
+            localColIndex.clear();
+            localValues.clear();
+
+            for (int j = 0; j < dense.cols; ++j) {
+                if (dense.data[i][j] != 0) {
+                    localColIndex.push_back(j);
+                    localValues.push_back(dense.data[i][j]);
+                }
+            }
+
+            // Update thread-local vectors with results from this row
+#pragma omp critical
+            {
+                csr.rowPtr[i + 1] = csr.rowPtr[i] + localValues.size();
+                tempColIndex.insert(tempColIndex.end(), localColIndex.begin(), localColIndex.end());
+                tempValues.insert(tempValues.end(), localValues.begin(), localValues.end());
+            }
+        }
+    }
+
+    // Finalize rowPtr
+    csr.rowPtr[csr.rows] = tempValues.size();
+
+    // Assign column indices and values
+    csr.colIndex = std::move(tempColIndex);
+    csr.values = std::move(tempValues);
+
+    return csr;
+}
+
+
+DenseMatrix multiply_csr_parallel(const CRSMatrix& A, const CRSMatrix& B_transposed) {
     assert(A.cols == B_transposed.rows);
 
     DenseMatrix C(A.rows, B_transposed.cols);
@@ -296,51 +288,26 @@ void print_dense(const DenseMatrix& matrix) {
     }
 }
 
-DenseMatrix transpose_dense(const DenseMatrix& matrix) {
-    DenseMatrix transposed(matrix.cols, matrix.rows);
-    for (int i = 0; i < matrix.rows; ++i) {
-        for (int j = 0; j < matrix.cols; ++j) {
-            transposed.data[j][i] = matrix.data[i][j];
-        }
-    }
-    return transposed;
-}
-
 int testMult() {
-    // Define matrix A in CSR format
+
     CRSMatrix A;
-    A.rows = 2; A.cols = 2;
-    A.rowPtr = { 0, 1, 2}; 
-    A.colIndex = { 0, 1}; 
-    A.values = { 1, 1 }; 
-    A.nnz = A.values.size();
+    A.rows = 3;
+    A.cols = 3;    
+    A.rowPtr = { 0, 3, 6, 9};
+    A.colIndex = { 0, 1, 2, 0, 1, 2, 0, 1, 2};
+    A.values = { 1, 2, 3, 4, 5, 6, 7, 8, 9};  
+  
+    DenseMatrix C = multiply_csr_parallel(A, A);    
+        
+    std::cout << "Resulting matrix C after multiplying A and transposed B:\n";
+    //print_dense(C);
 
-    // Define matrix B in CSR format
-    CRSMatrix B;
-    B.rows = 2; B.cols = 2;
-    B.rowPtr = { 0, 0, 2}; 
-    B.colIndex = { 0, 1}; 
-    B.values = { 1, 1};
-    B.nnz = B.values.size();
-
-    // Transpose matrix B
-    auto [B_transpose_rowPtr, B_transpose_colIndex, B_transpose_val] = ParallelTranspose(B.rows, B.cols, B.nnz, 0, B.rowPtr, B.colIndex, B.values);
-
-    CRSMatrix B_transposed;
-    B_transposed.rows = B.rows;
-    B_transposed.cols = B.cols;
-    B_transposed.rowPtr = std::move(B_transpose_rowPtr);
-    B_transposed.colIndex = std::move(B_transpose_colIndex);
-    B_transposed.values = std::move(B_transpose_val);
-
-    // Multiply A and transposed B
-    DenseMatrix C = multiply_csr_with_transpose_parallel(A, B_transposed);
-
-    C = transpose_dense(C);
-    print_dense(C);
+    auto CC = dense_to_csr(C);
+    print_csr(CC);
 
     return 0;
 }
+
 
 int count_non_zero_elements(const DenseMatrix& matrix) {
     int count = 0;
@@ -354,63 +321,53 @@ int count_non_zero_elements(const DenseMatrix& matrix) {
     return count;
 }
 
-
-// Main Function
 int main() {
-    testMult();
 
-    int size = 10000; // Matrix size
-    double sparsity = 0.1; // 1% sparsity
+    int size = 10000;
+    std::vector<int> sizesVector;
+    std::vector<double> time;
+    std::vector<int> procentMatrix;
+    std::vector<int> elementsA;
+    std::vector<int> elementsR;
+    for (int n = 1; n <= 10; ++n) {  
+        double sparsity = n / 100.0; 
+        std::cout << "Test za sparsity: " << sparsity * 100 << "%\n";
 
-    // Generate sparse matrix
-    CRSMatrix A = generate_sparse_matrix(size, sparsity);
+        CRSMatrix A = generate_sparse_matrix(size, sparsity);
 
+        int repeat = 5;
+        double averageTime = 0.0;
+        long number = 0;
+        for (int k = 1; k <= repeat; ++k) {
+            double timeParallel = measure_time([&]() {
+                DenseMatrix C = multiply_csr_parallel(A, A);
+                auto CC = dense_to_csr(C);                
+            });
+            
+            averageTime += timeParallel;
+        }
 
-    // Measure time for multiplication
+        averageTime /= repeat;
+        sizesVector.push_back(size);
+        procentMatrix.push_back(n);
+        elementsA.push_back(A.values.size());
+        elementsR.push_back(number);
+        time.push_back(averageTime);
+
+        std::cout << "Prosjek vremena za sparsity " << n << "%: " << averageTime << " sekundi\n";
+    }
     
-    double timeSequential = measure_time([&]() {
-        // Transpose matrix A
-        auto [A_transpose_rowPtr, A_transpose_colIndex, A_transpose_val] = ParallelTranspose(A.rows, A.cols, A.nnz, 0, A.rowPtr, A.colIndex, A.values);
+    std::cout << "----------------------------------------------------------------" << std::endl;
+    std::cout << " Rows | Time | Procent of nnz | Number of values in A matrix | Number of values in result matrix" << std::endl;
+    std::cout << "----------------------------------------------------------------" << std::endl;
 
-        CRSMatrix A_transposed;
-        A_transposed.rows = A.rows;
-        A_transposed.cols = A.cols;
-        A_transposed.rowPtr = std::move(A_transpose_rowPtr);
-        A_transposed.colIndex = std::move(A_transpose_colIndex);
-        A_transposed.values = std::move(A_transpose_val);
-        A_transposed.nnz = A_transpose_val.size();
-        DenseMatrix C = multiply_csr_with_transpose(A, A_transposed);
+    for (size_t i = 0; i < sizesVector.size(); ++i) {
+        std::cout << sizesVector[i] << "   | " << time[i] << " s       | " << procentMatrix[i] << "%        | " << elementsA[i] << " | "  << elementsR[i] << std::endl;
+    }
 
-
-        // Optionally print the result matrix if needed
-        // print_dense(C);
-        // 
-        // Ovo transpose_dense treba napraviti da korisiti onaj ParallelTranspose gotovi da se dobije pravi rezultat bez ovoga je rezultujuca matrica transponovana
-        //C = transpose_dense(C);
-        // 
-        // Ovo sluzilo meni da vidim da li doda taj broj elemenata u matricu C
-        //int nnz_count = count_non_zero_elements(C);
-        //std::cout << "Number of non-zero elements in the resulting matrix: " << nnz_count << std::endl;
-        
-    });
-
-    double timeParallel = measure_time([&]() {
-        // Transpose matrix A
-        auto [A_transpose_rowPtr, A_transpose_colIndex, A_transpose_val] = ParallelTranspose(A.rows, A.cols, A.nnz, 0, A.rowPtr, A.colIndex, A.values);
-
-        CRSMatrix A_transposed;
-        A_transposed.rows = A.rows;
-        A_transposed.cols = A.cols;
-        A_transposed.rowPtr = std::move(A_transpose_rowPtr);
-        A_transposed.colIndex = std::move(A_transpose_colIndex);
-        A_transposed.values = std::move(A_transpose_val);
-        A_transposed.nnz = A_transpose_val.size();
-        DenseMatrix C = multiply_csr_with_transpose_parallel(A, A_transposed);
-
-        });
-
-    std::cout << "Time taken for matrix multiplication sequential: " << timeSequential << " seconds" << std::endl;
-    std::cout << "Time taken for matrix multiplication parallel: " << timeParallel << " seconds" << std::endl;
+    std::cout << "----------------------------------------------------------------" << std::endl;
 
     return 0;
 }
+
+    
