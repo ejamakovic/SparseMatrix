@@ -133,6 +133,7 @@
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>-openmp:experimental
  %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

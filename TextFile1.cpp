@@ -1,4 +1,4 @@
-Ôªø#include <iostream>
+#include <iostream>
 #include <vector>
 #include <tuple>
 #include <random>
@@ -128,7 +128,7 @@ auto ParallelTranspose(const SIZE rows, const SIZE cols, const SIZE nnz,
     return std::make_tuple(std::move(ai_transpose), std::move(aj_transpose), std::move(av_transpose));
 }
 
-// Funkcija za generiranje sluƒçajne sparse matrice
+// Funkcija za generiranje sluËajne sparse matrice
 CRSMatrix generate_sparse_matrix(int size, double sparsity) {
     CRSMatrix matrix;
     matrix.rows = size;
@@ -224,7 +224,7 @@ void test_generate_sparse_matrix() {
 
     // Proveri da li su rowPtr, colIndex i val ispravni
     for (int i = 0; i < size; ++i) {
-        assert(matrix.rowPtr[i + 1] >= matrix.rowPtr[i]); // rowPtr mora biti monotono rastuƒáa
+        assert(matrix.rowPtr[i + 1] >= matrix.rowPtr[i]); // rowPtr mora biti monotono rastuÊa
     }
 
     // Proveri da li su svi koloni unutar opsega
@@ -237,22 +237,25 @@ void test_generate_sparse_matrix() {
     print_csr(matrix);
 }
 
-
-
+// Funkcija za mnoûenje CSR matrice sa njenom transponovanom verzijom
 DenseMatrix multiply_csr_with_transpose(const CRSMatrix& A, const CRSMatrix& B_transposed) {
-    assert(A.cols == B_transposed.rows);
+    assert(A.cols == B_transposed.rows); // Ensure matrix dimensions are compatible for multiplication
 
     DenseMatrix C(A.rows, B_transposed.cols);
 
+    // Iterate through each row of A
     for (int i = 0; i < A.rows; ++i) {
+        // Iterate through each non-zero element in row i of A
         for (int j = A.rowPtr[i]; j < A.rowPtr[i + 1]; ++j) {
             int colA = A.colIndex[j];
             int valA = A.values[j];
 
+            // Iterate through each non-zero element in column colA of B_transposed
             for (int k = B_transposed.rowPtr[colA]; k < B_transposed.rowPtr[colA + 1]; ++k) {
                 int colB = B_transposed.colIndex[k];
                 int valB = B_transposed.values[k];
 
+                // Accumulate the product in the result matrix C
                 C.data[i][colB] += valA * valB;
             }
         }
@@ -260,30 +263,6 @@ DenseMatrix multiply_csr_with_transpose(const CRSMatrix& A, const CRSMatrix& B_t
 
     return C;
 }
-
-DenseMatrix multiply_csr_with_transpose_parallel(const CRSMatrix& A, const CRSMatrix& B_transposed) {
-    assert(A.cols == B_transposed.rows);
-
-    DenseMatrix C(A.rows, B_transposed.cols);
-
-#pragma omp parallel for
-    for (int i = 0; i < A.rows; ++i) {
-        for (int j = A.rowPtr[i]; j < A.rowPtr[i + 1]; ++j) {
-            int colA = A.colIndex[j];
-            int valA = A.values[j];
-
-            for (int k = B_transposed.rowPtr[colA]; k < B_transposed.rowPtr[colA + 1]; ++k) {
-                int colB = B_transposed.colIndex[k];
-                int valB = B_transposed.values[k];
-
-                C.data[i][colB] += valA * valB;
-            }
-        }
-    }
-
-    return C;
-}
-
 
 // Funkcija za ispis dense matrice
 void print_dense(const DenseMatrix& matrix) {
@@ -306,21 +285,21 @@ DenseMatrix transpose_dense(const DenseMatrix& matrix) {
     return transposed;
 }
 
-int testMult() {
+int main() {
     // Define matrix A in CSR format
     CRSMatrix A;
     A.rows = 2; A.cols = 2;
-    A.rowPtr = { 0, 1, 2}; 
-    A.colIndex = { 0, 1}; 
-    A.values = { 1, 1 }; 
+    A.rowPtr = { 0, 1, 2 };
+    A.colIndex = { 0, 1 };
+    A.values = { 1, 1 };
     A.nnz = A.values.size();
 
     // Define matrix B in CSR format
     CRSMatrix B;
     B.rows = 2; B.cols = 2;
-    B.rowPtr = { 0, 0, 2}; 
-    B.colIndex = { 0, 1}; 
-    B.values = { 1, 1};
+    B.rowPtr = { 0, 0, 2 };
+    B.colIndex = { 0, 1 };
+    B.values = { 1, 1 };
     B.nnz = B.values.size();
 
     // Transpose matrix B
@@ -334,7 +313,7 @@ int testMult() {
     B_transposed.values = std::move(B_transpose_val);
 
     // Multiply A and transposed B
-    DenseMatrix C = multiply_csr_with_transpose_parallel(A, B_transposed);
+    DenseMatrix C = multiply_csr_with_transpose(A, B_transposed);
 
     C = transpose_dense(C);
     print_dense(C);
@@ -342,75 +321,3 @@ int testMult() {
     return 0;
 }
 
-int count_non_zero_elements(const DenseMatrix& matrix) {
-    int count = 0;
-    for (const auto& row : matrix.data) {
-        for (const auto& value : row) {
-            if (value != 0.0) {
-                ++count;
-            }
-        }
-    }
-    return count;
-}
-
-
-// Main Function
-int main() {
-    testMult();
-
-    int size = 10000; // Matrix size
-    double sparsity = 0.1; // 1% sparsity
-
-    // Generate sparse matrix
-    CRSMatrix A = generate_sparse_matrix(size, sparsity);
-
-
-    // Measure time for multiplication
-    
-    double timeSequential = measure_time([&]() {
-        // Transpose matrix A
-        auto [A_transpose_rowPtr, A_transpose_colIndex, A_transpose_val] = ParallelTranspose(A.rows, A.cols, A.nnz, 0, A.rowPtr, A.colIndex, A.values);
-
-        CRSMatrix A_transposed;
-        A_transposed.rows = A.rows;
-        A_transposed.cols = A.cols;
-        A_transposed.rowPtr = std::move(A_transpose_rowPtr);
-        A_transposed.colIndex = std::move(A_transpose_colIndex);
-        A_transposed.values = std::move(A_transpose_val);
-        A_transposed.nnz = A_transpose_val.size();
-        DenseMatrix C = multiply_csr_with_transpose(A, A_transposed);
-
-
-        // Optionally print the result matrix if needed
-        // print_dense(C);
-        // 
-        // Ovo transpose_dense treba napraviti da korisiti onaj ParallelTranspose gotovi da se dobije pravi rezultat bez ovoga je rezultujuca matrica transponovana
-        //C = transpose_dense(C);
-        // 
-        // Ovo sluzilo meni da vidim da li doda taj broj elemenata u matricu C
-        //int nnz_count = count_non_zero_elements(C);
-        //std::cout << "Number of non-zero elements in the resulting matrix: " << nnz_count << std::endl;
-        
-    });
-
-    double timeParallel = measure_time([&]() {
-        // Transpose matrix A
-        auto [A_transpose_rowPtr, A_transpose_colIndex, A_transpose_val] = ParallelTranspose(A.rows, A.cols, A.nnz, 0, A.rowPtr, A.colIndex, A.values);
-
-        CRSMatrix A_transposed;
-        A_transposed.rows = A.rows;
-        A_transposed.cols = A.cols;
-        A_transposed.rowPtr = std::move(A_transpose_rowPtr);
-        A_transposed.colIndex = std::move(A_transpose_colIndex);
-        A_transposed.values = std::move(A_transpose_val);
-        A_transposed.nnz = A_transpose_val.size();
-        DenseMatrix C = multiply_csr_with_transpose_parallel(A, A_transposed);
-
-        });
-
-    std::cout << "Time taken for matrix multiplication sequential: " << timeSequential << " seconds" << std::endl;
-    std::cout << "Time taken for matrix multiplication parallel: " << timeParallel << " seconds" << std::endl;
-
-    return 0;
-}
