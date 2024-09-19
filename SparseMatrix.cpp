@@ -329,7 +329,7 @@ int main() {
         double sparsity = n / 100.0;
         std::cout << "Test za sparsity: " << sparsity * 100 << "%\n";
 
-        int repeat = 10;
+        int repeat = 1;
         double averageTime = 0.0;
         CRSMatrix CC;
         for (int k = 1; k <= repeat; ++k) {
