@@ -14,23 +14,21 @@
 // Struktura za CSR matricu
 struct CRSMatrix
 {
-    int rows; // number of rows
-    int cols; // number of columns
-    
-    std::vector<double> values; // non-zero elements
-    std::vector<int> colIndex; // column indices
-    std::vector<int> rowPtr; // row ptr
+    int rows; 
+    int cols; 
+    std::vector<double> values; 
+    std::vector<int> colIndex; 
+    std::vector<int> rowPtr; 
 };
 
 
 // Struktura za dense matricu
 struct DenseMatrix {
-    int rows; 
-    int cols; 
-    std::vector<std::vector<double>> data; 
+    int rows;
+    int cols;
+    std::vector<std::vector<double>> data;
 
-    DenseMatrix(){}
-    // Constructor
+    DenseMatrix() {}   
     DenseMatrix(int r, int c) : rows(r), cols(c), data(r, std::vector<double>(c, 0.0)) {}
 };
 
@@ -70,18 +68,17 @@ CRSMatrix generate_sparse_matrix(int size, double sparsity) {
     matrix.colIndex.resize(nnz);
 
     std::vector<int> row_lengths(size, 0);
-    std::vector<std::vector<int>> row_columns(size); // Vektor vektora za čuvanje kolona po redovima
+    std::vector<std::vector<int>> row_columns(size);
     std::default_random_engine generator;
     std::uniform_int_distribution<int> row_dist(0, size - 1);
 
     for (int i = 0; i < nnz; ++i) {
         int row = row_dist(generator);
         int col = row_dist(generator);
-        row_columns[row].push_back(col); // Čuvaj kolone u privremenom vektoru za red
+        row_columns[row].push_back(col); 
         ++row_lengths[row];
     }
-
-    // Sortiranje kolona unutar svakog reda
+    
     for (int row = 0; row < size; ++row) {
         std::sort(row_columns[row].begin(), row_columns[row].end());
     }
@@ -96,7 +93,7 @@ CRSMatrix generate_sparse_matrix(int size, double sparsity) {
         }
     }
 
-    matrix.rowPtr[size] = nnz; // Poslednji element rowPtr pokazuje na kraj
+    matrix.rowPtr[size] = nnz; 
 
     return matrix;
 }
@@ -166,43 +163,19 @@ auto measure_time(Func func) {
     return duration.count();
 }
 
-DenseMatrix multiply_csr(const CRSMatrix& A, const CRSMatrix& B_transposed) {
-    assert(A.cols == B_transposed.rows);
-
-    DenseMatrix C(A.rows, B_transposed.cols);
-
-    for (int i = 0; i < A.rows; ++i) {
-        for (int j = A.rowPtr[i]; j < A.rowPtr[i + 1]; ++j) {
-            int colA = A.colIndex[j];
-            int valA = A.values[j];
-
-            for (int k = B_transposed.rowPtr[colA]; k < B_transposed.rowPtr[colA + 1]; ++k) {
-                int colB = B_transposed.colIndex[k];
-                int valB = B_transposed.values[k];
-
-                C.data[i][colB] += valA * valB;
-            }
-        }
-    }
-
-    return C;
-}
 
 CRSMatrix dense_to_csr(const DenseMatrix& dense) {
     CRSMatrix csr;
     csr.rows = dense.rows;
-    csr.cols = dense.cols;
-
-    // Initialize rowPtr with zeros (size: rows + 1)
+    csr.cols = dense.cols;    
     csr.rowPtr.resize(csr.rows + 1, 0);
-
-    // Temporary vectors to store column indices and values
+   
     std::vector<int> tempColIndex;
     std::vector<double> tempValues;
 
-    // Populate row pointers and collect column indices and values
+    
     for (int i = 0; i < dense.rows; ++i) {
-        int rowStart = tempValues.size(); // Starting index for the current row in values/colIndices
+        int rowStart = tempValues.size(); 
 
         for (int j = 0; j < dense.cols; ++j) {
             if (dense.data[i][j] != 0) {
@@ -210,91 +183,108 @@ CRSMatrix dense_to_csr(const DenseMatrix& dense) {
                 tempValues.push_back(dense.data[i][j]);
             }
         }
-
-        // Update rowPtr for the next row
+        
         csr.rowPtr[i + 1] = tempValues.size();
     }
-
-    // Assign column indices and values
+    
     csr.colIndex = std::move(tempColIndex);
     csr.values = std::move(tempValues);
 
     return csr;
 }
 
-CRSMatrix dense_to_csr_parallel(const DenseMatrix& dense) {    
-        CRSMatrix csr;
-        csr.rows = dense.rows;
-        csr.cols = dense.cols;
+CRSMatrix dense_to_csr_parallel(const DenseMatrix& dense) {
+    CRSMatrix csr;
+    csr.rows = dense.rows;
+    csr.cols = dense.cols; 
+    csr.rowPtr.resize(csr.rows + 1, 0);
 
-        // Initialize rowPtr with zeros (size: rows + 1)
-        csr.rowPtr.resize(csr.rows + 1, 0);
-
-        // First pass: Calculate the number of non-zero elements per row in parallel
+    // First pass: Calculate the number of non-zero elements per row in parallel
 #pragma omp parallel for
-        for (int i = 0; i < dense.rows; ++i) {
-            for (int j = 0; j < dense.cols; ++j) {
-                if (dense.data[i][j] != 0) {
+    for (int i = 0; i < dense.rows; ++i) {
+        for (int j = 0; j < dense.cols; ++j) {
+            if (dense.data[i][j] != 0) {
 #pragma omp atomic
-                    csr.rowPtr[i + 1]++;
-                }
+                csr.rowPtr[i + 1]++;
             }
         }
-
-        // Prefix sum (cumulative sum) to get rowPtr positions
-        for (int i = 1; i <= dense.rows; ++i) {
-            csr.rowPtr[i] += csr.rowPtr[i - 1];
-        }
-
-        // Allocate space for colIndex and values based on the total number of non-zero elements
-        int totalNonZeros = csr.rowPtr[dense.rows];
-        csr.colIndex.resize(totalNonZeros);
-        csr.values.resize(totalNonZeros);
-
-        // Temporary array to track the current write position for each row
-        std::vector<int> currentPos(csr.rows, 0);
-
-        // Initialize currentPos to the starting positions of each row
-#pragma omp parallel for
-        for (int i = 0; i < csr.rows; ++i) {
-            currentPos[i] = csr.rowPtr[i];
-        }
-
-        // Second pass: Populate colIndex and values in parallel, writing to the correct positions
-#pragma omp parallel for
-        for (int i = 0; i < dense.rows; ++i) {
-            for (int j = 0; j < dense.cols; ++j) {
-                if (dense.data[i][j] != 0) {
-                    int pos = currentPos[i]; // Get the current position for this row
-
-                    csr.colIndex[pos] = j;
-                    csr.values[pos] = dense.data[i][j];
-
-                    // Increment the current position for the next non-zero element in this row
-                    currentPos[i]++;
-                }
-            }
-        }
-
-        return csr;
     }
 
+    // Prefix sum (cumulative sum) to get rowPtr positions
+    for (int i = 1; i <= dense.rows; ++i) {
+        csr.rowPtr[i] += csr.rowPtr[i - 1];
+    }
+
+    // Allocate space for colIndex and values based on the total number of non-zero elements
+    int totalNonZeros = csr.rowPtr[dense.rows];
+    csr.colIndex.resize(totalNonZeros);
+    csr.values.resize(totalNonZeros);
+
+    // Temporary array to track the current write position for each row
+    std::vector<int> currentPos(csr.rows, 0);
+
+    // Initialize currentPos to the starting positions of each row
+#pragma omp parallel for
+    for (int i = 0; i < csr.rows; ++i) {
+        currentPos[i] = csr.rowPtr[i];
+    }
+
+    // Second pass: Populate colIndex and values in parallel, writing to the correct positions
+#pragma omp parallel for
+    for (int i = 0; i < dense.rows; ++i) {
+        for (int j = 0; j < dense.cols; ++j) {
+            if (dense.data[i][j] != 0) {
+                int pos = currentPos[i]; // Get the current position for this row
+
+                csr.colIndex[pos] = j;
+                csr.values[pos] = dense.data[i][j];
+
+                // Increment the current position for the next non-zero element in this row
+                currentPos[i]++;
+            }
+        }
+    }
+
+    return csr;
+}
 
 
-DenseMatrix multiply_csr_parallel(const CRSMatrix& A, const CRSMatrix& B_transposed) {
-    assert(A.cols == B_transposed.rows);
+DenseMatrix multiply_csr(const CRSMatrix& A, const CRSMatrix& B) {
+    assert(A.cols == B.rows);
 
-    DenseMatrix C(A.rows, B_transposed.cols);
+    DenseMatrix C(A.rows, B.cols);
+
+    for (int i = 0; i < A.rows; ++i) {
+        for (int j = A.rowPtr[i]; j < A.rowPtr[i + 1]; ++j) {
+            int colA = A.colIndex[j];
+            int valA = A.values[j];
+            int nextRow = B.rowPtr[colA + 1];
+            for (int k = B.rowPtr[colA]; k < nextRow; ++k) {
+                int colB = B.colIndex[k];
+                int valB = B.values[k];
+
+                C.data[i][colB] += valA * valB;
+            }
+        }
+    }
+
+    return C;
+}
+
+DenseMatrix multiply_csr_parallel(const CRSMatrix& A, const CRSMatrix& B) {
+    assert(A.cols == B.rows);
+
+    DenseMatrix C(A.rows, B.cols);
 
 #pragma omp parallel for
     for (int i = 0; i < A.rows; ++i) {
         for (int j = A.rowPtr[i]; j < A.rowPtr[i + 1]; ++j) {
             int colA = A.colIndex[j];
             int valA = A.values[j];
-
-            for (int k = B_transposed.rowPtr[colA]; k < B_transposed.rowPtr[colA + 1]; ++k) {
-                int colB = B_transposed.colIndex[k];
-                int valB = B_transposed.values[k];
+            int nextRow = B.rowPtr[colA + 1];
+            for (int k = B.rowPtr[colA]; k < nextRow; ++k) {
+                int colB = B.colIndex[k];
+                int valB = B.values[k];
 
                 C.data[i][colB] += valA * valB;
             }
@@ -305,35 +295,25 @@ DenseMatrix multiply_csr_parallel(const CRSMatrix& A, const CRSMatrix& B_transpo
 }
 
 
-
-
 int testMult() {
-
     CRSMatrix A;
     A.rows = 3;
-    A.cols = 3;    
-    A.rowPtr = { 0, 3, 6, 9};
-    A.colIndex = { 0, 1, 2, 0, 1, 2, 0, 1, 2};
-    A.values = { 1, 2, 3, 4, 5, 6, 7, 8, 9};  
-  
-    DenseMatrix C = multiply_csr_parallel(A, A);                  
+    A.cols = 3;
+    A.rowPtr = { 0, 3, 6, 9 };
+    A.colIndex = { 0, 1, 2, 0, 1, 2, 0, 1, 2 };
+    A.values = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
 
+    DenseMatrix C = multiply_csr_parallel(A, A);
     auto CC = dense_to_csr_parallel(C);
     print_csr(CC);
 
     return 0;
-}
 
-int count_non_zero_elements(const DenseMatrix& matrix) {
-    int count = 0;
-    for (const auto& row : matrix.data) {
-        for (const auto& value : row) {
-            if (value != 0.0) {
-                ++count;
-            }
-        }
-    }
-    return count;
+    //Tacan rezultat mnozenja:
+    // 
+    //Row Pointer (rowPtr): 0 3 6 9
+    //Column Indices(colIndex) : 0 1 2 0 1 2 0 1 2
+    //Values(val) : 30 36 42 66 81 96 102 126 150
 }
 
 int main() {
@@ -349,17 +329,18 @@ int main() {
         double sparsity = n / 100.0;
         std::cout << "Test za sparsity: " << sparsity * 100 << "%\n";
 
-        int repeat = 5;
+        int repeat = 10;
         double averageTime = 0.0;
         CRSMatrix CC;
         for (int k = 1; k <= repeat; ++k) {
-            CRSMatrix A = generate_sparse_matrix(size, sparsity);
+            CRSMatrix A = generate_sparse_matrix_equal(size, sparsity);
+            //print_csr(A);
             CRSMatrix B = generate_sparse_matrix(size, sparsity);
             double timeParallel = measure_time([&]() {
                 DenseMatrix C = multiply_csr_parallel(A, B);
                 CC = dense_to_csr_parallel(C);
-            });
-            
+                });
+
             averageTime += timeParallel;
         }
 
@@ -371,14 +352,14 @@ int main() {
 
         std::cout << "Prosjek vremena za rijetkost " << n << "%: " << averageTime << " sekundi\n";
     }
-    
+
     std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
     std::cout << " Size of A |    Time    | Procent of nnz in A matrix | Number of values in result matrix " << std::endl;
     std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
 
     for (size_t i = 0; i < sizesVector.size(); ++i) {
         std::cout << "   " << sizesVector[i] << "   |  " << std::fixed << std::setprecision(4) << time[i] << " s  |             " << procentMatrix[i] << "%             |              ";
-        std::cout << elementsR[i] ;
+        std::cout << elementsR[i];
         std::cout << std::endl;
     }
 
@@ -387,4 +368,3 @@ int main() {
     return 0;
 }
 
-    
