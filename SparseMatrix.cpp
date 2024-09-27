@@ -294,7 +294,6 @@ public:
                 {
                     int colB = B.colIndex[k];
                     double valB = B.values[k];
-#pragma omp atomic
                     C.data[i][colB] += valA * valB;
                 }
             }
@@ -698,19 +697,233 @@ void preformance_test_sequential_with_conversion()
     std::cout << "Performance tests completed." << std::endl;
 }
 
+
+void performance_test_without_conversion_random()
+{
+    int size = 10000;  // Matrix size for testing
+    std::vector<int> sizesVector;
+    std::vector<double> time;
+    std::vector<int> percentMatrix;
+    std::vector<int> elementsR;
+    
+
+    for (int n = 1; n <= 10; ++n)
+    {
+        double sparsity = n / 100.0;
+    
+
+        int repeat = 10;  // Increase the number of repeats for more accurate average
+        double averageTime = 0.0;
+        CRSMatrix CC;
+        CRSMatrix A = CRSMatrix::generate_random(size, sparsity);
+        CRSMatrix B = CRSMatrix::generate_random(size, sparsity);
+
+        for (int k = 0; k < repeat; ++k)
+        {
+            
+            
+
+            double timeParallel = measure_time([&]()
+                {
+                    DenseMatrix C = A.multiply_parallel(B);                    
+                });
+
+            averageTime += timeParallel;
+
+        }
+
+        averageTime /= repeat;
+        sizesVector.push_back(size);
+        percentMatrix.push_back(n);
+        elementsR.push_back(CC.nnz);
+        time.push_back(averageTime);
+        
+    }
+    std::cout << "Results without conversion random matrix" << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+    std::cout << " Size of A |    Time    | Percent of nnz in A matrix | Number of values in result matrix " << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+
+    for (size_t i = 0; i < sizesVector.size(); ++i)
+    {
+        std::cout << "   " << sizesVector[i] << "   |  " << std::fixed << std::setprecision(4) << time[i] << " s  |             " << percentMatrix[i] << "%             |              ";
+        std::cout << elementsR[i];
+        std::cout << std::endl;
+    }
+
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+}
+
+void performance_test_with_conversion_random()
+{
+    int size = 10000;  // Matrix size for testing
+    std::vector<int> sizesVector;
+    std::vector<double> time;
+    std::vector<int> percentMatrix;
+    std::vector<int> elementsR;    
+
+    for (int n = 1; n <= 10; ++n)
+    {
+        double sparsity = n / 100.0;        
+
+        int repeat = 10;  // Increase the number of repeats for more accurate average
+        double averageTime = 0.0;
+        CRSMatrix CC;
+        CRSMatrix A = CRSMatrix::generate_random(size, sparsity);
+        CRSMatrix B = CRSMatrix::generate_random(size, sparsity);
+        for (int k = 0; k < repeat; ++k)
+        {
+            
+
+            double timeParallel = measure_time([&]()
+                {
+                    DenseMatrix C = A.multiply_parallel(B);                     
+                    CC = C.to_csr_parallel();  // You might consider removing this if not needed for your test.
+                });
+
+            averageTime += timeParallel;
+            
+        }
+
+        averageTime /= repeat;
+        sizesVector.push_back(size);
+        percentMatrix.push_back(n);
+        elementsR.push_back(CC.nnz);
+        time.push_back(averageTime);
+        
+    }
+    std::cout << "Results with conversion random matrix" << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+    std::cout << " Size of A |    Time    | Percent of nnz in A matrix | Number of values in result matrix " << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+
+    for (size_t i = 0; i < sizesVector.size(); ++i)
+    {
+        std::cout << "   " << sizesVector[i] << "   |  " << std::fixed << std::setprecision(4) << time[i] << " s  |             " << percentMatrix[i] << "%             |              ";
+        std::cout << elementsR[i];
+        std::cout << std::endl;
+    }
+
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+}
+
+
+void performance_test_without_conversion_equal()
+{
+    int size = 10000;  // Matrix size for testing
+    std::vector<int> sizesVector;
+    std::vector<double> time;
+    std::vector<int> percentMatrix;
+    std::vector<int> elementsR;
+
+
+    for (int n = 1; n <= 10; ++n)
+    {
+        double sparsity = n / 100.0;
+
+
+        int repeat = 10;  // Increase the number of repeats for more accurate average
+        double averageTime = 0.0;
+        CRSMatrix CC;
+        CRSMatrix A = CRSMatrix::generate_equal(size, sparsity);
+        CRSMatrix B = CRSMatrix::generate_equal(size, sparsity);
+
+        for (int k = 0; k < repeat; ++k)
+        {
+
+
+
+            double timeParallel = measure_time([&]()
+                {
+                    DenseMatrix C = A.multiply_parallel(B);
+                });
+
+            averageTime += timeParallel;
+
+        }
+
+        averageTime /= repeat;
+        sizesVector.push_back(size);
+        percentMatrix.push_back(n);
+        elementsR.push_back(CC.nnz);
+        time.push_back(averageTime);
+
+    }
+    std::cout << "Results without conversion equal matrix" << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+    std::cout << " Size of A |    Time    | Percent of nnz in A matrix | Number of values in result matrix " << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+
+    for (size_t i = 0; i < sizesVector.size(); ++i)
+    {
+        std::cout << "   " << sizesVector[i] << "   |  " << std::fixed << std::setprecision(4) << time[i] << " s  |             " << percentMatrix[i] << "%             |              ";
+        std::cout << elementsR[i];
+        std::cout << std::endl;
+    }
+
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+}
+
+void performance_test_with_conversion_equal()
+{
+    int size = 10000;  // Matrix size for testing
+    std::vector<int> sizesVector;
+    std::vector<double> time;
+    std::vector<int> percentMatrix;
+    std::vector<int> elementsR;
+
+    for (int n = 1; n <= 10; ++n)
+    {
+        double sparsity = n / 100.0;
+
+        int repeat = 10;  // Increase the number of repeats for more accurate average
+        double averageTime = 0.0;
+        CRSMatrix CC;
+        CRSMatrix A = CRSMatrix::generate_equal(size, sparsity);
+        CRSMatrix B = CRSMatrix::generate_equal(size, sparsity);
+        for (int k = 0; k < repeat; ++k)
+        {
+
+
+            double timeParallel = measure_time([&]()
+                {
+                    DenseMatrix C = A.multiply_parallel(B);
+                    CC = C.to_csr_parallel();  // You might consider removing this if not needed for your test.
+                });
+
+            averageTime += timeParallel;
+
+        }
+
+        averageTime /= repeat;
+        sizesVector.push_back(size);
+        percentMatrix.push_back(n);
+        elementsR.push_back(CC.nnz);
+        time.push_back(averageTime);
+
+    }
+    std::cout << "Results with conversion equal matrix" << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+    std::cout << " Size of A |    Time    | Percent of nnz in A matrix | Number of values in result matrix " << std::endl;
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+
+    for (size_t i = 0; i < sizesVector.size(); ++i)
+    {
+        std::cout << "   " << sizesVector[i] << "   |  " << std::fixed << std::setprecision(4) << time[i] << " s  |             " << percentMatrix[i] << "%             |              ";
+        std::cout << elementsR[i];
+        std::cout << std::endl;
+    }
+
+    std::cout << "-------------------------------------------------------------------------------------------" << std::endl;
+}
+
+
 int main()
 {
-    std::cout << "Running sequential, implementation preformance test. This test only measures the multiplication of sparse matrixes in CSR format. Running test.." << std::endl;
-    preformance_test_sequential_with_conversion();
-
-    std::cout << "Running a sequential variant preformance test. This test measures the multiplication time and conversion of result dense matrix to CSR format! Running test..." << std::endl;
-    preformance_test_sequential_without_conversion();
-
-    std::cout << "Running parallel implementation preformance test. This test measures the multiplication time and conversion of result dense matrix to CSR format! Running test..." << std::endl;
-    preformance_test_with_conversion();
-
-    std::cout << "Running parallel implementation preformance test. This test only measures the multiplication of sparse matrixes in CSR format. Running test.." << std::endl;
-    preformance_test_without_conversion();
-
+    // Call your performance test function
+    performance_test_with_conversion_random();
+    performance_test_without_conversion_random();
+    performance_test_with_conversion_equal();
+    performance_test_without_conversion_equal();
     return 0;
 }
